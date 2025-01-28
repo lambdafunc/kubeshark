@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kubeshark/kubeshark/docker"
-	"github.com/kubeshark/kubeshark/internal/connect"
 	"github.com/kubeshark/kubeshark/kubernetes/helm"
 	"github.com/kubeshark/kubeshark/misc"
 	"github.com/kubeshark/kubeshark/utils"
@@ -33,7 +31,6 @@ type tapState struct {
 }
 
 var state tapState
-var connector *connect.Connector
 
 type Readiness struct {
 	Hub   bool
@@ -47,22 +44,11 @@ var ready *Readiness
 func tap() {
 	ready = &Readiness{}
 	state.startTime = time.Now()
-	docker.SetRegistry(config.Config.Tap.Docker.Registry)
-	docker.SetTag(config.Config.Tap.Docker.Tag)
-	log.Info().Str("registry", docker.GetRegistry()).Str("tag", docker.GetTag()).Msg("Using Docker:")
-	if config.Config.Tap.Pcap != "" {
-		err := pcap(config.Config.Tap.Pcap)
-		if err != nil {
-			os.Exit(1)
-		}
-		return
-	}
+	log.Info().Str("registry", config.Config.Tap.Docker.Registry).Str("tag", config.Config.Tap.Docker.Tag).Msg("Using Docker:")
 
 	log.Info().
 		Str("limit", config.Config.Tap.StorageLimit).
 		Msg(fmt.Sprintf("%s will store the traffic up to a limit (per node). Oldest TCP/UDP streams will be removed once the limit is reached.", misc.Software))
-
-	connector = connect.NewConnector(kubernetes.GetHubUrl(), connect.DefaultRetries, connect.DefaultTimeout)
 
 	kubernetesProvider, err := getKubernetesProviderForCli(false, false)
 	if err != nil {
@@ -203,7 +189,7 @@ func watchHubPod(ctx context.Context, kubernetesProvider *kubernetes.Provider, c
 					ready.Lock()
 					ready.Hub = true
 					ready.Unlock()
-					postHubStarted(ctx, kubernetesProvider, cancel)
+					log.Info().Str("pod", kubernetes.HubPodName).Msg("Ready.")
 				}
 
 				ready.Lock()
@@ -293,6 +279,7 @@ func watchFrontPod(ctx context.Context, kubernetesProvider *kubernetes.Provider,
 					ready.Lock()
 					ready.Front = true
 					ready.Unlock()
+					log.Info().Str("pod", kubernetes.FrontPodName).Msg("Ready.")
 				}
 
 				ready.Lock()
@@ -409,12 +396,6 @@ func watchHubEvents(ctx context.Context, kubernetesProvider *kubernetes.Provider
 	}
 }
 
-func postHubStarted(ctx context.Context, kubernetesProvider *kubernetes.Provider, cancel context.CancelFunc) {
-	if config.Config.Scripting.Source != "" && config.Config.Scripting.WatchScripts {
-		watchScripts(false)
-	}
-}
-
 func postFrontStarted(ctx context.Context, kubernetesProvider *kubernetes.Provider, cancel context.CancelFunc) {
 	startProxyReportErrorIfAny(
 		kubernetesProvider,
@@ -438,12 +419,26 @@ func postFrontStarted(ctx context.Context, kubernetesProvider *kubernetes.Provid
 	if !config.Config.HeadlessMode {
 		utils.OpenBrowser(url)
 	}
+
+	for !ready.Hub {
+		time.Sleep(100 * time.Millisecond)
+	}
+
+
+	if (config.Config.Scripting.Source != "" || len(config.Config.Scripting.Sources) > 0) && config.Config.Scripting.WatchScripts {
+		watchScripts(ctx, kubernetesProvider, false)
+	}
+
+	if config.Config.Scripting.Console {
+		go runConsoleWithoutProxy()
+	}
 }
 
 func updateConfig(kubernetesProvider *kubernetes.Provider) {
 	_, _ = kubernetes.SetSecret(kubernetesProvider, kubernetes.SECRET_LICENSE, config.Config.License)
 	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_POD_REGEX, config.Config.Tap.PodRegexStr)
 	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_NAMESPACES, strings.Join(config.Config.Tap.Namespaces, ","))
+	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_EXCLUDED_NAMESPACES, strings.Join(config.Config.Tap.ExcludedNamespaces, ","))
 
 	data, err := json.Marshal(config.Config.Scripting.Env)
 	if err != nil {
@@ -453,11 +448,22 @@ func updateConfig(kubernetesProvider *kubernetes.Provider) {
 		_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_SCRIPTING_ENV, string(data))
 	}
 
+	ingressEnabled := ""
+	if config.Config.Tap.Ingress.Enabled {
+		ingressEnabled = "true"
+	}
+
 	authEnabled := ""
 	if config.Config.Tap.Auth.Enabled {
 		authEnabled = "true"
 	}
+
+	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_INGRESS_ENABLED, ingressEnabled)
+	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_INGRESS_HOST, config.Config.Tap.Ingress.Host)
+
+	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_PROXY_FRONT_PORT, fmt.Sprint(config.Config.Tap.Proxy.Front.Port))
+
 	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_AUTH_ENABLED, authEnabled)
-	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_AUTH_APPROVED_EMAILS, strings.Join(config.Config.Tap.Auth.ApprovedEmails, ","))
-	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_AUTH_APPROVED_DOMAINS, strings.Join(config.Config.Tap.Auth.ApprovedDomains, ","))
+	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_AUTH_TYPE, config.Config.Tap.Auth.Type)
+	_, _ = kubernetes.SetConfig(kubernetesProvider, kubernetes.CONFIG_AUTH_SAML_IDP_METADATA_URL, config.Config.Tap.Auth.Saml.IdpMetadataUrl)
 }

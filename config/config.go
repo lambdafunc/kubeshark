@@ -41,7 +41,7 @@ func InitConfig(cmd *cobra.Command) error {
 	var err error
 	DebugMode, err = cmd.Flags().GetBool(DebugFlag)
 	if err != nil {
-		log.Error().Err(err).Msg(fmt.Sprintf("Can't recieve '%s' flag", DebugFlag))
+		log.Error().Err(err).Msg(fmt.Sprintf("Can't receive '%s' flag", DebugFlag))
 	}
 
 	if DebugMode {
@@ -63,6 +63,9 @@ func InitConfig(cmd *cobra.Command) error {
 
 	Config = CreateDefaultConfig()
 	Config.Tap.Debug = DebugMode
+	if DebugMode {
+		Config.LogLevel = "debug"
+	}
 	cmdName = cmd.Name()
 	if utils.Contains([]string{
 		"clean",
@@ -70,6 +73,7 @@ func InitConfig(cmd *cobra.Command) error {
 		"pro",
 		"proxy",
 		"scripts",
+		"pprof",
 	}, cmdName) {
 		cmdName = "tap"
 	}
@@ -146,6 +150,7 @@ func loadConfigFile(config *ConfigStruct, silent bool) error {
 	} else {
 		ConfigFilePath = cwdConfig
 	}
+	defer reader.Close()
 
 	buf, err := io.ReadAll(reader)
 	if err != nil {
@@ -222,7 +227,7 @@ func mergeSetFlag(configElemValue reflect.Value, setValues []string) error {
 	}
 
 	if len(setErrors) > 0 {
-		return fmt.Errorf(strings.Join(setErrors, "\n"))
+		return errors.New(strings.Join(setErrors, "\n"))
 	}
 
 	return nil

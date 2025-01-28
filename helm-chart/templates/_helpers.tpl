@@ -2,7 +2,7 @@
 Expand the name of the chart.
 */}}
 {{- define "kubeshark.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
@@ -11,16 +11,7 @@ We truncate at 63 chars because some Kubernetes name fields are limited to this 
 If release name contains chart name it will be used as a full name.
 */}}
 {{- define "kubeshark.fullname" -}}
-{{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- $name := default .Chart.Name .Values.nameOverride }}
-{{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
-{{- end }}
-{{- end }}
+{{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
@@ -36,13 +27,8 @@ Common labels
 {{- define "kubeshark.labels" -}}
 helm.sh/chart: {{ include "kubeshark.chart" . }}
 {{ include "kubeshark.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
+app.kubernetes.io/version: {{ .Chart.Version | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.additionalLabels }}
-{{ toYaml . }}
-{{- end }}
 {{- if .Values.tap.labels }}
 {{ toYaml .Values.tap.labels }}
 {{- end }}
@@ -60,9 +46,43 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 Create the name of the service account to use
 */}}
 {{- define "kubeshark.serviceAccountName" -}}
-{{- if and .Values.serviceAccount .Values.serviceAccount.create }}
-{{- default (include "kubeshark.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
 {{- printf "%s-service-account" .Release.Name }}
 {{- end }}
+
+{{/*
+Escape double quotes in a string
+*/}}
+{{- define "kubeshark.escapeDoubleQuotes" -}}
+  {{- regexReplaceAll "\"" . "\"" -}}
+{{- end -}}
+
+{{/*
+Define debug docker tag suffix
+*/}}
+{{- define "kubeshark.dockerTagDebugVersion" -}}
+{{- .Values.tap.pprof.enabled | ternary "-debug" "" }}
+{{- end -}}
+
+{{/*
+Create docker tag default version
+*/}}
+{{- define "kubeshark.defaultVersion" -}}
+{{- $defaultVersion := (printf "v%s" .Chart.Version) -}}
+{{- if not .Values.tap.docker.tagLocked }}
+  {{- $defaultVersion = regexReplaceAll "^([^.]+\\.[^.]+).*" $defaultVersion "$1" -}}
 {{- end }}
+{{- $defaultVersion }}
+{{- end -}}
+
+{{/*
+Set sentry based on internet connectivity and telemetry
+*/}}
+{{- define "sentry.enabled" -}}
+  {{- $sentryEnabledVal := .Values.tap.sentry.enabled -}}
+  {{- if not .Values.internetConnectivity -}}
+    {{- $sentryEnabledVal = false -}}
+  {{- else if not .Values.tap.telemetry.enabled -}}
+    {{- $sentryEnabledVal = false -}}
+  {{- end -}}
+  {{- $sentryEnabledVal -}}
+{{- end -}}
